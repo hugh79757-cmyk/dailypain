@@ -1,0 +1,8 @@
+name = "dailypain"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dailypain-db"
+database_id = "a1d49dc0-273f-4f89-858d-28268d182f32"
