@@ -76,7 +76,7 @@ def collect():
 def call_openai(prompt):
     url = "https://api.openai.com/v1/chat/completions"
     body = json.dumps({
-        "model": "gpt-4o-mini",
+        "model": "gpt-5-nano",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2
     }).encode("utf-8")

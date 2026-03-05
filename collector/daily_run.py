@@ -90,7 +90,7 @@ def classify_batch(items, start_idx):
         batch_text += f"[{idx}] 제목: {item['title'][:80]}\n내용: {item['description'][:150]}\n키워드: {item['keyword']}\n\n"
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5-nano",
             messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":batch_text}],
             temperature=0.1, response_format={"type":"json_object"})
         parsed = json.loads(resp.choices[0].message.content)

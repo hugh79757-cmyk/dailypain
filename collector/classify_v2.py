@@ -55,7 +55,7 @@ def classify_batch(items, start_idx):
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5-nano",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": batch_text}
