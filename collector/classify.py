@@ -16,7 +16,7 @@ with open(os.path.join(PROJECT_DIR, ".env")) as f:
 
 OPENAI_KEY = env_vars.get("OPENAI_API_KEY", "")
 
-def call_openai(prompt, model="gpt-5-nano"):
+def call_openai(prompt, model="gpt-5-nano", reasoning_effort="minimal"):
     url = "https://api.openai.com/v1/chat/completions"
     body = json.dumps({
         "model": model,
