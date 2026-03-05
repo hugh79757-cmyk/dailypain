@@ -60,7 +60,7 @@ def classify_batch(items, start_idx):
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": batch_text}
             ],
-            temperature=0.1,
+            
             response_format={"type": "json_object"}
         )
         text = resp.choices[0].message.content

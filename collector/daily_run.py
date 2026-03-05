@@ -92,7 +92,7 @@ def classify_batch(items, start_idx):
         resp = client.chat.completions.create(
             model="gpt-5-nano",
             messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":batch_text}],
-            temperature=0.1, response_format={"type":"json_object"})
+            response_format={"type":"json_object"})
         parsed = json.loads(resp.choices[0].message.content)
         if isinstance(parsed, dict):
             for key in parsed:
