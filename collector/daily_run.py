@@ -1,8 +1,17 @@
-import os, json, time, hashlib, subprocess, urllib.request, urllib.parse, urllib.error
+import hashlib
+import json
+import logging
+import os
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from openai import OpenAI
+
 from dotenv import load_dotenv
+from openai import OpenAI
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _SCRIPT_DIR.parent
@@ -15,12 +24,15 @@ today = datetime.now().strftime("%Y-%m-%d")
 data_dir = str(_PROJECT_DIR / "data")
 log_path = os.path.join(data_dir, "dailypain.log")
 os.makedirs(data_dir, exist_ok=True)
+_log_handler = RotatingFileHandler(log_path, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+_log_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_logger = logging.getLogger("dailypain")
+_logger.setLevel(logging.INFO)
+_logger.addHandler(_log_handler)
+_logger.addHandler(logging.StreamHandler())
 
 def log(msg):
-    line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    print(line)
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    _logger.info(msg)
 
 # ── 재시도 헬퍼 ──
 def retry_with_backoff(fn, max_retries=3, base_delay=1):
@@ -81,7 +93,8 @@ for kw in keywords:
     url = f"https://openapi.naver.com/v1/search/kin.json?{params}"
     try:
         def fetch_naver():
-            req = urllib.request.Request(url, headers={"X-Naver-Client-Id": naver_id, "X-Naver-Client-Secret": naver_secret})
+            req = urllib.request.Request(url, headers={
+                "X-Naver-Client-Id": naver_id, "X-Naver-Client-Secret": naver_secret})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read().decode())
         data = retry_with_backoff(fetch_naver)
@@ -102,21 +115,29 @@ with open(raw_path, "w", encoding="utf-8") as f:
 log(f"수집 완료: {len(raw)}개")
 
 # ── 2단계: AI 분류 ──
-SYSTEM_PROMPT = """너는 B2B SaaS 창업 기회 분석가다. 네이버 지식인 질문을 보고, **사업자/자영업자/직장인이 업무 중 겪는 반복적 고통**만 골라내라.
-
-반드시 제외: 개인 건강, 연애, 가족, 법률 상담, 게임, 학교 숙제, 단순 정보 질문, 일회성 문제, 사업·업무 맥락 없는 질문.
-
-골라낼 것: 사업 운영 중 반복되는 불편, 소프트웨어로 자동화/개선 가능한 업무 고통, 반복성 신호, 기존 도구의 한계를 호소하는 질문.
-
-JSON 배열로 응답:
-[{"index":0,"keep":true/false,"category":"세무회계|인사급여|재고물류|마케팅|고객관리|매장운영|쇼핑몰|부동산|교육|의료|건설|IT자동화|기타업무","pain_summary":"구체적 고통 한 줄","pain_score":1-100,"solution_hint":"SaaS 아이디어 한 줄"}]
-keep=false 항목도 포함. 엄격하게 필터링."""
+SYSTEM_PROMPT = (
+    "너는 B2B SaaS 창업 기회 분석가다. 네이버 지식인 질문을 보고, "
+    "**사업자/자영업자/직장인이 업무 중 겪는 반복적 고통**만 골라내라.\n\n"
+    "반드시 제외: 개인 건강, 연애, 가족, 법률 상담, 게임, 학교 숙제, "
+    "단순 정보 질문, 일회성 문제, 사업·업무 맥락 없는 질문.\n\n"
+    "골라낼 것: 사업 운영 중 반복되는 불편, 소프트웨어로 자동화/개선 가능한 업무 고통, "
+    "반복성 신호, 기존 도구의 한계를 호소하는 질문.\n\n"
+    "JSON 배열로 응답:\n"
+    '[{"index":0,"keep":true/false,'
+    '"category":"세무회계|인사급여|재고물류|마케팅|고객관리|매장운영|쇼핑몰|부동산|교육|의료|건설|IT자동화|기타업무",'
+    '"pain_summary":"구체적 고통 한 줄","pain_score":1-100,"solution_hint":"SaaS 아이디어 한 줄"}]\n'
+    "keep=false 항목도 포함. 엄격하게 필터링."
+)
 
 def classify_batch(items, start_idx):
     batch_text = ""
     for i, item in enumerate(items):
         idx = start_idx + i
-        batch_text += f"[{idx}] 제목: {item['title'][:80]}\n내용: {item['description'][:150]}\n키워드: {item['keyword']}\n\n"
+        batch_text += (
+            f"[{idx}] 제목: {item['title'][:80]}\n"
+            f"내용: {item['description'][:150]}\n"
+            f"키워드: {item['keyword']}\n\n"
+        )
     try:
         resp = retry_with_backoff(
             lambda: client.chat.completions.create(
@@ -127,7 +148,8 @@ def classify_batch(items, start_idx):
         parsed = json.loads(resp.choices[0].message.content)
         if isinstance(parsed, dict):
             for key in parsed:
-                if isinstance(parsed[key], list): return parsed[key]
+                if isinstance(parsed[key], list):
+                    return parsed[key]
             return []
         return parsed
     except Exception as e:
@@ -199,4 +221,4 @@ def upload_via_worker(items):
 uploaded = upload_via_worker(classified)
 log(f"D1 업로드 완료: {uploaded}/{min(len(classified),50)}개")
 
-log(f"=== 완료 ===\n")
+log("=== 완료 ===\n")

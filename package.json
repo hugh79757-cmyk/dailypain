@@ -5,9 +5,14 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "d1:execute": "wrangler d1 execute dailypain-db --remote"
+    "d1:execute": "wrangler d1 execute dailypain-db --remote",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint workers/worker.js"
   },
   "devDependencies": {
-    "wrangler": "^4.94.0"
+    "wrangler": "^4.94.0",
+    "vitest": "^4.0.0",
+    "eslint": "^9.0.0"
   }
 }

@@ -2,13 +2,15 @@
 DailyPain 통합 파이프라인
 collect(네이버 API) → classify(AI) → upload(D1)
 """
-import os
 import json
-import urllib.request
-import urllib.parse
-import urllib.error
+import os
 import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
+
 from dotenv import load_dotenv
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -34,12 +36,12 @@ def retry_with_backoff(fn, max_retries=3, base_delay=1):
                 time.sleep(base_delay * (2 ** attempt))
                 continue
             raise
-        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
             if attempt < max_retries - 1:
                 time.sleep(base_delay * (2 ** attempt))
                 continue
             raise
-        except Exception as e:
+        except Exception:
             if attempt < max_retries - 1:
                 time.sleep(base_delay * (2 ** attempt))
                 continue
@@ -105,28 +107,25 @@ def call_openai(prompt):
     return data["choices"][0]["message"]["content"]
 
 def classify_batch(items):
-    prompt = """네이버 지식인에서 수집한 질문 목록이다. 각 질문을 분석해서 JSON 배열로 응답.
-
-## 판단 기준
-- "actionable": true = 소프트웨어, 앱, 웹서비스, 자동화 도구로 해결 가능한 비즈니스 문제
-- "actionable": false = 개인 건강, 연애, 감정, 취미, 일반 상식, 숙제, 법률 상담 등
-
-## 중요 규칙
-- 제목과 내용이 불일치하면 내용(description) 기준으로 판단
-- 판단이 애매하면 반드시 false 처리
-- "~추천해주세요"가 이미 시장에 흔한 서비스면 pain_score 낮게
-- 반복적으로 많은 사람이 겪을수록 pain_score 높게
-
-## actionable=true인 경우 필드:
-- "category": 분야 (쇼핑몰운영, 회계세무, HR인사, 마케팅, 제조생산, IT개발, 교육, 부동산, 요식업, 물류배달, 의료, 금융, 프리랜서, 기타)
-- "pain_summary": 핵심 문제를 한 문장으로 (제목이 아닌 실제 내용 기반)
-- "pain_score": 1-100 (빈도 × 심각도 × 해결가능성)
-- "solution_hint": 어떤 서비스가 해결할 수 있는지 한 문장
-
-JSON 배열만 응답. 코드블록 없이. 설명 없이.
-
-질문 목록:
-"""
+    prompt = (
+        "네이버 지식인에서 수집한 질문 목록이다. 각 질문을 분석해서 JSON 배열로 응답.\n\n"
+        "## 판단 기준\n"
+        '- "actionable": true = 소프트웨어, 앱, 웹서비스, 자동화 도구로 해결 가능한 비즈니스 문제\n'
+        '- "actionable": false = 개인 건강, 연애, 감정, 취미, 일반 상식, 숙제, 법률 상담 등\n\n'
+        "## 중요 규칙\n"
+        "- 제목과 내용이 불일치하면 내용(description) 기준으로 판단\n"
+        '- 판단이 애매하면 반드시 false 처리\n'
+        '- "~추천해주세요"가 이미 시장에 흔한 서비스면 pain_score 낮게\n'
+        "- 반복적으로 많은 사람이 겪을수록 pain_score 높게\n\n"
+        "## actionable=true인 경우 필드:\n"
+        '- "category": 분야 (쇼핑몰운영, 회계세무, HR인사, 마케팅, 제조생산, IT개발, '
+        "교육, 부동산, 요식업, 물류배달, 의료, 금융, 프리랜서, 기타)\n"
+        '- "pain_summary": 핵심 문제를 한 문장으로 (제목이 아닌 실제 내용 기반)\n'
+        '- "pain_score": 1-100 (빈도 × 심각도 × 해결가능성)\n'
+        '- "solution_hint": 어떤 서비스가 해결할 수 있는지 한 문장\n\n'
+        "JSON 배열만 응답. 코드블록 없이. 설명 없이.\n\n"
+        "질문 목록:\n"
+    )
     for i, item in enumerate(items):
         prompt += f"\n[{i}] 제목: {item['title']}\n    내용: {item['description'][:200]}\n"
 
@@ -194,7 +193,7 @@ def upload_to_d1(items):
             if result.get("ok"):
                 success += 1
         except Exception as e:
-            pass  # 중복 등 무시
+            print(f"  [업로드 ERROR] {e}")
 
     print(f"[업로드] {success}/{len(items)}개 성공")
     return success
@@ -234,13 +233,13 @@ def main():
 
     print(f"\n{'='*50}")
     print(f"완료: 수집 {len(raw)} → 분류 {len(actionable)} → 업로드 {uploaded}")
-    print(f"카테고리 분포:")
+    print("카테고리 분포:")
     for cat, cnt in sorted(categories.items(), key=lambda x: -x[1]):
         print(f"  {cat}: {cnt}개")
 
     # 상위 5개 출력
     top5 = sorted(actionable, key=lambda x: x.get("pain_score", 0), reverse=True)[:5]
-    print(f"\n--- 오늘의 TOP 5 ---")
+    print("\n--- 오늘의 TOP 5 ---")
     for i, r in enumerate(top5, 1):
         print(f"{i}. [{r.get('category','')}] {r.get('pain_summary','')}")
         print(f"   점수: {r.get('pain_score',0)} | {r['link']}")

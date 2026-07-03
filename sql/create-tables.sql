@@ -17,15 +17,6 @@ CREATE TABLE IF NOT EXISTS pain_points (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS daily_stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT UNIQUE,
-    total_collected INTEGER DEFAULT 0,
-    total_actionable INTEGER DEFAULT 0,
-    top_categories TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE INDEX IF NOT EXISTS idx_pain_category ON pain_points(category);
 CREATE INDEX IF NOT EXISTS idx_pain_score ON pain_points(pain_score DESC);
 CREATE INDEX IF NOT EXISTS idx_pain_date ON pain_points(collected_at);
