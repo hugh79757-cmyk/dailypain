@@ -1,17 +1,32 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const cors = {"Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"GET,POST,OPTIONS","Access-Control-Allow-Headers":"Content-Type"};
+    const ALLOWED_ORIGINS = ["https://dailypain.hugh79757.workers.dev"];
+    const origin = request.headers.get("Origin") || url.origin || "";
+    const cors = ALLOWED_ORIGINS.includes(origin) ? {
+      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Methods": "GET,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    } : {};
+    
+    // Auth gate: POST endpoints require Bearer token matching env.API_TOKEN
+    const AUTH_TOKEN = env.API_TOKEN;
+    function unauthorized(msg) {
+      return new Response(JSON.stringify({error: msg || "Unauthorized"}), {status: 401, headers: {"Content-Type":"application/json"}});
+    }
+    
     if (request.method === "OPTIONS") return new Response(null, {headers:cors});
-    if (url.pathname === "/auth/callback") return new Response("OK", {headers:{"Content-Type":"text/plain"}});
-    if (url.pathname === "/deauth") return new Response(JSON.stringify({success:true}), {headers:{"Content-Type":"application/json",...cors}});
-    if (url.pathname === "/data-deletion") return new Response(JSON.stringify({url:url.href,confirmation_code:"dp_"+Date.now()}), {headers:{"Content-Type":"application/json",...cors}});
+    // Deprecated endpoints
+    if (["/auth/callback","/deauth","/data-deletion"].includes(url.pathname)) {
+      return new Response(JSON.stringify({error: "gone", message: "This endpoint has been removed."}), {status: 410, headers: {"Content-Type":"application/json"}});
+    }
     if (url.pathname === "/api/pain" && request.method === "POST") {
+      if (!AUTH_TOKEN || request.headers.get("Authorization") !== `Bearer ${AUTH_TOKEN}`) return unauthorized();
       try {
         const b = await request.json();
         await env.DB.prepare("INSERT INTO pain_points (date,keyword,category,title,description,pain_summary,pain_score,solution_hint,source_url,source) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(b.date,b.keyword,b.category,b.title,b.description,b.pain_summary,b.pain_score||0,b.solution_hint,b.source_url,b.source||"naver_kin").run();
         return new Response(JSON.stringify({ok:true}), {headers:{"Content-Type":"application/json",...cors}});
-      } catch(e) { return new Response(JSON.stringify({error:e.message}), {status:500,headers:{"Content-Type":"application/json",...cors}}); }
+      } catch(e) { return new Response(JSON.stringify({error:"Internal server error"}), {status:500, headers:{"Content-Type":"application/json",...cors}}); }
     }
     if (url.pathname === "/api/pains") {
       const date = url.searchParams.get("date") || new Date().toISOString().split("T")[0];
@@ -27,6 +42,7 @@ export default {
       return new Response(JSON.stringify(results.map(r=>r.date)), {headers:{"Content-Type":"application/json",...cors}});
     }
     if (url.pathname === "/api/star" && request.method === "POST") {
+      if (!AUTH_TOKEN || request.headers.get("Authorization") !== `Bearer ${AUTH_TOKEN}`) return unauthorized();
       const {id} = await request.json();
       await env.DB.prepare("UPDATE pain_points SET starred = CASE WHEN starred=1 THEN 0 ELSE 1 END WHERE id=?").bind(id).run();
       return new Response(JSON.stringify({ok:true}), {headers:{"Content-Type":"application/json",...cors}});

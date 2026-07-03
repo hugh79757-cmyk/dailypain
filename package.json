@@ -1,0 +1,13 @@
+{
+  "name": "dailypain-workers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "d1:execute": "wrangler d1 execute dailypain-db --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.94.0"
+  }
+}

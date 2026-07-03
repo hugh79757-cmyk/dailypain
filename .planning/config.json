@@ -1,0 +1,11 @@
+{
+  "project": "DailyPain",
+  "version": "1.0.0",
+  "mode": "interactive",
+  "priority": "stabilization",
+  "research_skip": true,
+  "phase_count": null,
+  "created": "2026-07-03",
+  "auto_commit": false,
+  "language": "ko"
+}

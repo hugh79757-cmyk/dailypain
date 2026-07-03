@@ -6,27 +6,44 @@ import os
 import json
 import urllib.request
 import urllib.parse
+import urllib.error
 import re
 from datetime import datetime
+from dotenv import load_dotenv
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 
 # .env 로드
-env_vars = {}
-with open(os.path.join(PROJECT_DIR, ".env")) as f:
-    for line in f:
-        line = line.strip()
-        if "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            env_vars[k] = v
+load_dotenv(os.path.join(PROJECT_DIR, ".env"))
 
-NAVER_ID = env_vars["NAVER_CLIENT_ID"]
-NAVER_SECRET = env_vars["NAVER_CLIENT_SECRET"]
-OPENAI_KEY = env_vars["OPENAI_API_KEY"]
-D1_API_URL = env_vars.get("D1_API_URL", "")
-D1_API_KEY = env_vars.get("D1_API_KEY", "")
+NAVER_ID = os.environ["NAVER_CLIENT_ID"]
+NAVER_SECRET = os.environ["NAVER_CLIENT_SECRET"]
+OPENAI_KEY = os.environ["OPENAI_API_KEY"]
+D1_API_URL = os.environ.get("D1_API_URL", "")
+D1_API_KEY = os.environ.get("D1_API_KEY", "")
 
+
+# ── Retry helper ──
+def retry_with_backoff(fn, max_retries=3, base_delay=1):
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
 
 # ========== 1단계: 수집 ==========
 
@@ -51,7 +68,7 @@ def collect():
 
     for pattern in kw["pain_patterns"]:
         try:
-            data = search_kin(pattern, display=10, sort="date")
+            data = retry_with_backoff(lambda: search_kin(pattern, display=10, sort="date"))
             for item in data.get("items", []):
                 link = item["link"]
                 if link in seen_links:
@@ -113,7 +130,7 @@ JSON 배열만 응답. 코드블록 없이. 설명 없이.
     for i, item in enumerate(items):
         prompt += f"\n[{i}] 제목: {item['title']}\n    내용: {item['description'][:200]}\n"
 
-    result = call_openai(prompt)
+    result = retry_with_backoff(lambda: call_openai(prompt))
     result = result.strip()
     if result.startswith("```"):
         result = result.split("\n", 1)[1]
@@ -129,9 +146,12 @@ def classify(raw_items):
         print(f"  [분류] {i+1}-{min(i+batch_size, len(raw_items))}...")
         try:
             classified = classify_batch(batch)
+            if not isinstance(classified, list):
+                print(f"  [분류 WARN] 응답이 list가 아님 (type={type(classified).__name__}), skip batch")
+                continue
             for j, c in enumerate(classified):
                 idx = i + j
-                if idx < len(raw_items) and c.get("actionable"):
+                if idx < len(raw_items) and isinstance(c, dict) and c.get("actionable"):
                     item = raw_items[idx].copy()
                     item.update(c)
                     item["classified_at"] = datetime.now().isoformat()

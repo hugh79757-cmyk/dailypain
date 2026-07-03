@@ -1,19 +1,18 @@
-import os, json, time, hashlib, subprocess, urllib.request, urllib.parse
+import os, json, time, hashlib, subprocess, urllib.request, urllib.parse, urllib.error
 from datetime import datetime
+from pathlib import Path
 from openai import OpenAI
+from dotenv import load_dotenv
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PROJECT_DIR = _SCRIPT_DIR.parent
 
 # .env 로드
-env_path = "/Users/twinssn/Projects/dailypain/.env"
-with open(env_path) as f:
-    for line in f:
-        line = line.strip()
-        if "=" in line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            os.environ[k] = v
+load_dotenv(_PROJECT_DIR / ".env")
 
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 today = datetime.now().strftime("%Y-%m-%d")
-data_dir = "/Users/twinssn/Projects/dailypain/data"
+data_dir = str(_PROJECT_DIR / "data")
 log_path = os.path.join(data_dir, "dailypain.log")
 os.makedirs(data_dir, exist_ok=True)
 
@@ -22,6 +21,34 @@ def log(msg):
     print(line)
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
+
+# ── 재시도 헬퍼 ──
+def retry_with_backoff(fn, max_retries=3, base_delay=1):
+    """Call fn() with exponential backoff. Re-raises last exception after max_retries."""
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                log(f"  [재시도 {attempt+1}/{max_retries}] 429 rate limited, waiting {delay}s...")
+                time.sleep(delay)
+                continue
+            raise
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                log(f"  [재시도 {attempt+1}/{max_retries}] network error: {e}, waiting {delay}s...")
+                time.sleep(delay)
+                continue
+            raise
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                log(f"  [재시도 {attempt+1}/{max_retries}] {e}, waiting {delay}s...")
+                time.sleep(delay)
+                continue
+            raise
 
 # ── 1단계: 키워드 수집 ──
 keywords = [
@@ -52,17 +79,19 @@ raw = []
 for kw in keywords:
     params = urllib.parse.urlencode({"query": kw, "display": 10, "sort": "date"})
     url = f"https://openapi.naver.com/v1/search/kin.json?{params}"
-    req = urllib.request.Request(url, headers={"X-Naver-Client-Id": naver_id, "X-Naver-Client-Secret": naver_secret})
     try:
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read().decode())
-            for item in data.get("items", []):
-                uid = hashlib.md5(item["link"].encode()).hexdigest()
-                if uid not in seen:
-                    seen.add(uid)
-                    raw.append({"keyword": kw, "title": item["title"].replace("<b>","").replace("</b>",""),
-                                "description": item["description"].replace("<b>","").replace("</b>",""),
-                                "link": item["link"], "collected_at": datetime.now().isoformat()})
+        def fetch_naver():
+            req = urllib.request.Request(url, headers={"X-Naver-Client-Id": naver_id, "X-Naver-Client-Secret": naver_secret})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode())
+        data = retry_with_backoff(fetch_naver)
+        for item in data.get("items", []):
+            uid = hashlib.md5(item["link"].encode()).hexdigest()
+            if uid not in seen:
+                seen.add(uid)
+                raw.append({"keyword": kw, "title": item["title"].replace("<b>","").replace("</b>",""),
+                            "description": item["description"].replace("<b>","").replace("</b>",""),
+                            "link": item["link"], "collected_at": datetime.now().isoformat()})
     except Exception as e:
         log(f"  [수집 오류] {kw}: {e}")
     time.sleep(0.15)
@@ -89,10 +118,12 @@ def classify_batch(items, start_idx):
         idx = start_idx + i
         batch_text += f"[{idx}] 제목: {item['title'][:80]}\n내용: {item['description'][:150]}\n키워드: {item['keyword']}\n\n"
     try:
-        resp = client.chat.completions.create(
-            model="gpt-5-nano", reasoning_effort="minimal",
-            messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":batch_text}],
-            response_format={"type":"json_object"})
+        resp = retry_with_backoff(
+            lambda: client.chat.completions.create(
+                model="gpt-5-nano", reasoning_effort="minimal",
+                messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content":batch_text}],
+                response_format={"type":"json_object"},
+                timeout=30))
         parsed = json.loads(resp.choices[0].message.content)
         if isinstance(parsed, dict):
             for key in parsed:
@@ -109,6 +140,9 @@ for i in range(0, len(raw), 15):
     log(f"  분류 중... {i+1}-{i+len(batch)}/{len(raw)}")
     results = classify_batch(batch, i)
     for r in results:
+        if not isinstance(r, dict):
+            log(f"  [분류 경고] 응답이 dict가 아님 (type={type(r).__name__}), 건너뜀")
+            continue
         idx = r.get("index", 0)
         if r.get("keep") and 0 <= idx < len(raw):
             item = raw[idx].copy()
@@ -123,40 +157,46 @@ with open(cls_path, "w", encoding="utf-8") as f:
     json.dump(classified, f, ensure_ascii=False, indent=2)
 log(f"B2B 페인포인트: {len(classified)}개 ({len(classified)*100//max(len(raw),1)}% 통과)")
 
-# ── 3단계: SQL 파일 생성 + wrangler로 D1 업로드 ──
-def esc(s):
-    return str(s).replace("'", "''")[:200] if s else ""
+# ── 3단계: HTTP 업로드 (Worker API) ──
+def upload_via_worker(items):
+    """POST each item to Worker /api/pain with Bearer auth."""
+    api_url = os.environ.get("D1_API_URL", "").rstrip("/")
+    api_key = os.environ.get("D1_API_KEY", "")
+    if not api_url or not api_key:
+        log("D1_API_URL 또는 D1_API_KEY 미설정 — 업로드 스킵")
+        return 0
 
-lines = []
-for item in classified[:50]:
-    sql = (
-        f"INSERT OR IGNORE INTO pain_points (date, source, source_url, keyword, title, description, "
-        f"category, pain_summary, pain_score, solution_hint, is_actionable, collected_at, classified_at) "
-        f"VALUES ('{today}', 'naver_kin', '{esc(item.get('link',''))}', '{esc(item.get('keyword',''))}', "
-        f"'{esc(item.get('title',''))}', '{esc(item.get('description',''))}', "
-        f"'{esc(item.get('category',''))}', '{esc(item.get('pain_summary',''))}', "
-        f"{item.get('pain_score', 0)}, '{esc(item.get('solution_hint',''))}', "
-        f"1, '{item.get('collected_at','')}', '{datetime.now().isoformat()}');"
-    )
-    lines.append(sql)
+    success = 0
+    for item in items[:50]:      # Same cap as before
+        body = json.dumps({
+            "date": today,
+            "source": "naver_kin",
+            "source_url": item.get("link", ""),
+            "keyword": item.get("keyword", ""),
+            "title": item.get("title", ""),
+            "description": item.get("description", ""),
+            "category": item.get("category", ""),
+            "pain_summary": item.get("pain_summary", ""),
+            "pain_score": item.get("pain_score", 0),
+            "solution_hint": item.get("solution_hint", ""),
+            "classified_at": datetime.now().isoformat()
+        }).encode("utf-8")
+        req = urllib.request.Request(f"{api_url}/api/pain", data=body, method="POST")
+        req.add_header("Authorization", f"Bearer {api_key}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                if result.get("ok"):
+                    success += 1
+        except urllib.error.HTTPError as e:
+            body_err = e.read().decode("utf-8", errors="replace")[:100]
+            log(f"  [업로드 HTTP 오류] {e.code}: {body_err}")
+        except Exception as e:
+            log(f"  [업로드 오류] {e}")
+    return success
 
-sql_path = f"{data_dir}/{today}-upload.sql"
-with open(sql_path, "w", encoding="utf-8") as f:
-    f.write("\n".join(lines))
-log(f"SQL 파일 생성: {len(lines)}개 INSERT문")
-
-# wrangler로 업로드
-env = os.environ.copy()
-env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH","")
-result = subprocess.run(
-    ["npx", "wrangler", "d1", "execute", "dailypain-db", "--remote", f"--file={sql_path}"],
-    cwd="/Users/twinssn/Projects/dailypain/workers",
-    capture_output=True, text=True, env=env, timeout=120
-)
-
-if result.returncode == 0:
-    log(f"D1 업로드 완료: {len(lines)}개")
-else:
-    log(f"D1 업로드 실패: {result.stderr[:200]}")
+uploaded = upload_via_worker(classified)
+log(f"D1 업로드 완료: {uploaded}/{min(len(classified),50)}개")
 
 log(f"=== 완료 ===\n")
