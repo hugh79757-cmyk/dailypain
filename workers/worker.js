@@ -23,16 +23,19 @@ export default {
     if (url.pathname === "/api/pain" && request.method === "POST") {
       if (!AUTH_TOKEN || request.headers.get("Authorization") !== `Bearer ${AUTH_TOKEN}`) return unauthorized();
       try {
-        const b = await request.json();
-        await env.DB.prepare("INSERT INTO pain_points (date,keyword,category,title,description,pain_summary,pain_score,solution_hint,source_url,source) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(b.date,b.keyword,b.category,b.title,b.description,b.pain_summary,b.pain_score||0,b.solution_hint,b.source_url,b.source||"naver_kin").run();
+        const b = await request.json() || {};
+const v = (x) => (x === undefined ? null : x);
+await env.DB.prepare("INSERT INTO pain_points (date,keyword,category,title,description,pain_summary,pain_score,solution_hint,source_url,source,post_id,author,permalink,collected_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(v(b.date)||"",v(b.keyword),v(b.category),v(b.title)||"untitled",v(b.description),v(b.pain_summary),v(b.pain_score)||0,v(b.solution_hint),v(b.source_url),v(b.source)||"threads",v(b.post_id),v(b.author),v(b.permalink),v(b.collected_at)||Date.now()).run();
         return new Response(JSON.stringify({ok:true}), {headers:{"Content-Type":"application/json",...cors}});
       } catch(e) { return new Response(JSON.stringify({error:"Internal server error"}), {status:500, headers:{"Content-Type":"application/json",...cors}}); }
     }
     if (url.pathname === "/api/pains") {
       const date = url.searchParams.get("date") || new Date().toISOString().split("T")[0];
       const cat = url.searchParams.get("category") || "";
+      const src = url.searchParams.get("source") || "";
       let q = "SELECT * FROM pain_points WHERE date = ?"; const p = [date];
       if (cat) { q += " AND category = ?"; p.push(cat); }
+      if (src) { q += " AND source = ?"; p.push(src); }
       q += " ORDER BY pain_score DESC LIMIT 50";
       const {results} = await env.DB.prepare(q).bind(...p).all();
       return new Response(JSON.stringify(results), {headers:{"Content-Type":"application/json",...cors}});

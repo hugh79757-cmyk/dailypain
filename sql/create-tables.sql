@@ -14,7 +14,12 @@ CREATE TABLE IF NOT EXISTS pain_points (
     starred BOOLEAN DEFAULT 0,
     collected_at TEXT,
     classified_at TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- Threads 확장 (DAILYPAIN-THREADS-01 작업 5)
+    post_id TEXT,
+    author TEXT,
+    permalink TEXT,
+    source_ext TEXT DEFAULT 'threads'
 );
 
 CREATE INDEX IF NOT EXISTS idx_pain_category ON pain_points(category);
